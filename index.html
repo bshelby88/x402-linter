@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x402 Manifest Linter — free tool by RAEN</title>
+<meta name="description" content="Paste your x402.json payment manifest and get instant validation: scheme, network, payTo address format, price sanity, missing fields. Free tool from the RAEN x402 fleet.">
+<style>
+  :root{color-scheme:dark}
+  body{background:#0b1020;color:#dbe4ff;font-family:ui-monospace,Menlo,Consolas,monospace;margin:0;padding:2rem;max-width:900px;margin-inline:auto}
+  h1{color:#22d3ee;font-size:1.6rem}
+  a{color:#22d3ee}
+  textarea{width:100%;min-height:220px;background:#0f172a;color:#dbe4ff;border:1px solid #334155;border-radius:8px;padding:1rem;font-family:inherit;font-size:.9rem;box-sizing:border-box}
+  button{background:#22d3ee;color:#0b1020;border:0;border-radius:8px;padding:.7rem 1.4rem;font-weight:700;cursor:pointer;font-family:inherit;margin-top:.6rem}
+  #out{margin-top:1.2rem;white-space:pre-wrap;font-size:.85rem;line-height:1.5}
+  .ok{color:#34d399}.warn{color:#fbbf24}.bad{color:#f87171}
+  .card{background:#0f172a;border:1px solid #334155;border-radius:10px;padding:1rem 1.4rem;margin-top:1.5rem}
+  small{color:#7c8db5}
+</style>
+</head>
+<body>
+<h1>x402 Manifest Linter</h1>
+<p>Validate an <code>x402.json</code> payment manifest before you ship it. Everything runs locally in your browser — nothing is uploaded.</p>
+
+<textarea id="inp" placeholder='{"x402Version":1,"accepts":[{"scheme":"exact","network":"eip155:8453","payTo":"0x...","price":"$0.01","resource":"https://api.example.com/endpoint"}]}'></textarea>
+<button onclick="lint()">Lint manifest</button>
+<div id="out"></div>
+
+<div class="card">
+<h3>Why payTo drift matters</h3>
+<p>A stale or wrong <code>payTo</code> silently misroutes every payment. Common failure modes: hardcoded constant diverges from the served 402 challenge, checksummed vs lowercase mismatch, wrong network (eip155:8453 = Base Mainnet), zero-value prices (facilitators reject $0 challenges — use charge-and-rebate instead).</p>
+<h3>When your manifest is clean</h3>
+<p>RAEN runs 12 paid x402 services on Base — law lookup, ticker analysis, dispute letters, image generation, contract analysis and more — with a <strong>free-first-call charge-and-rebate trial</strong> (net $0). Try one via MCP: <code>raen-mcp-gateway.fly.dev/mcp</code>.</p>
+<p><a href="https://raen.royalruby.io">raen.royalruby.io</a> · <a href="https://github.com/bshelby88/raen-mcp">raen-mcp on GitHub</a> · <a href="https://bshelby88.github.io/x402-cookbook/">x402 Cookbook</a></p>
+</div>
+<footer><small>Free tool by RAEN (Royal Agentic Enterprises) — not affiliated with the x402 protocol. No data leaves your browser.</small></footer>
+
+<script>
+function lint(){
+  const out=document.getElementById('out');
+  const raw=document.getElementById('inp').value.trim();
+  if(!raw){out.innerHTML='<span class="bad">Paste a manifest first.</span>';return}
+  const lines=[];
+  let m;
+  try{m=JSON.parse(raw)}catch(e){out.innerHTML='<span class="bad">✗ Invalid JSON: '+e.message+'</span>';return}
+  lines.push('<span class="ok">✓ Valid JSON</span>');
+
+  if(m.x402Version===1)lines.push('<span class="ok">✓ x402Version = 1</span>');
+  else lines.push('<span class="warn">⚠ x402Version missing or not 1 (found: '+JSON.stringify(m.x402Version)+')</span>');
+
+  const acc=m.accepts||(m.error&&m.error.accepts);
+  if(!Array.isArray(acc)||!acc.length){lines.push('<span class="bad">✗ No accepts[] array found</span>');}
+  else{
+    lines.push('<span class="ok">✓ accepts[] with '+acc.length+' option(s)</span>');
+    acc.forEach((a,i)=>{
+      const p=t=>i+': '+t;
+      if(a.scheme==='exact')lines.push('<span class="ok">✓ ['+p('scheme')+'] exact</span>');
+      else lines.push('<span class="bad">✗ ['+p('scheme')+'] "'+a.scheme+'" — expected "exact"</span>');
+      if(a.network==='eip155:8453')lines.push('<span class="ok">✓ ['+p('network')+'] Base Mainnet</span>');
+      else lines.push('<span class="bad">✗ ['+p('network')+'] "'+a.network+'" — expected "eip155:8453" (Base Mainnet)</span>');
+      if(typeof a.payTo==='string'&&/^0x[a-fA-F0-9]{40}$/.test(a.payTo))
+        lines.push('<span class="ok">✓ ['+p('payTo')+'] valid EVM address ('+(a.payTo===a.payTo.toLowerCase()?'lowercase':'CHECKSUMMED')+' — both fine on-chain)</span>');
+      else lines.push('<span class="bad">✗ ['+p('payTo')+'] not a valid 0x…40-hex address</span>');
+      const pr=String(a.price??'');
+      const pm=pr.match(/^\$([0-9]*\.?[0-9]+)$/);
+      if(pm){const v=parseFloat(pm[1]);
+        if(v===0)lines.push('<span class="bad">✗ ['+p('price')+'] $0 — facilitators reject zero-value challenges; use charge-and-rebate</span>');
+        else if(v>5)lines.push('<span class="warn">⚠ ['+p('price')+'] $'+v+' — above common per-call ceiling; consider a bundle</span>');
+        else lines.push('<span class="ok">✓ ['+p('price')+'] $'+v+'</span>');
+      } else if(pr.startsWith('$'))lines.push('<span class="bad">✗ ['+p('price')+'] malformed "$" price: '+pr+'</span>');
+      else if(pr)lines.push('<span class="warn">⚠ ['+p('price')+'] non-dollar-string price: '+pr+' (verify your facilitator accepts this form)</span>');
+      else lines.push('<span class="warn">⚠ ['+p('price')+'] missing</span>');
+      if(a.resource&&/^https:\/\//.test(a.resource))lines.push('<span class="ok">✓ ['+p('resource')+'] https</span>');
+      else lines.push('<span class="warn">⚠ ['+p('resource')+'] missing or not https</span>');
+    });
+  }
+  const bad=lines.filter(l=>l.includes('bad')).length, warn=lines.filter(l=>l.includes('warn')).length;
+  lines.unshift(bad?'<span class="bad">RESULT: '+bad+' error(s), '+warn+' warning(s)</span>':warn?'<span class="warn">RESULT: no errors, '+warn+' warning(s)</span>':'<span class="ok">RESULT: CLEAN ✓</span>');
+  out.innerHTML=lines.join('\n');
+}
+</script>
+</body>
+</html>
